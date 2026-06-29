@@ -107,7 +107,8 @@ def create_contours_only_image(image_array, contours, pixelized = False):
 
     return contour_image
 
-
+def convert_pixels_to_millimeters(pixel_count, dpi=300):
+    pass
 
 
 if __name__ == "__main__":

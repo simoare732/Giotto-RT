@@ -1,47 +1,104 @@
 import serial
 import time
+import img_manager
 import os
 
 serial_port = '/dev/ttyACM0'
 baud_rate = 9600
-arduino = serial.Serial(port=serial_port, baudrate=baud_rate, timeout=1)
+arduino = serial.Serial(port=serial_port, baudrate=baud_rate, timeout=0.2, write_timeout=1)
+time.sleep(2)
 
-# Attende che Arduino completi il riavvio e il setup() iniziale
-time.sleep(3)
+START_MARKER = 0xFE
+END_MARKER = 0xFF
+MAX_PAYLOAD = 32
+
+
+def calc_checksum(data):
+    """
+    Compute the checksum of the given data using XOR operation.
+    """
+    cs = len(data)  
+    for b in data:
+        cs ^= b
+    return cs & 0xFF
 
 def send_data(msg_str):
-    # Converte la stringa in byte
-    payload_bytes = msg_str.encode('utf-8')
+    """
+    Send a message to the Arduino over the serial connection, with a specific packet structure.
+    The packet structure is as follows:
+    - Start marker (1 byte): 0xFE
+    - Length of the payload (1 byte)
+    - Payload (up to 32 bytes)
+    - Checksum (1 byte): XOR of the length and all payload bytes
+    - End marker (1 byte): 0xFF
+    The payload is truncated to a maximum of 32 bytes if it exceeds that length.
+    """
 
-    start_marker = b'\xFE'
-    # Utilizza i byte convertiti invece di un valore fisso
-    end_marker = b'\xFF'
+    payload = msg_str.encode('utf-8')[:MAX_PAYLOAD]
 
-    packet = start_marker + payload_bytes + end_marker
-    print(f"Invio pacchetto: {packet}")
+    packet = bytes([START_MARKER, len(payload)]) + payload + bytes([calc_checksum(payload), END_MARKER])
+    arduino.write(packet)
+    arduino.flush()
 
-    try:
-        arduino.write(packet)
-        arduino.flush()  # Assicura che i dati vengano inviati
-    except Exception as e:
-        print(f"Errore durante l'invio: {e}")
+def receive_data(timeout_s=2.0):
+    """
+    Receive a message from the Arduino over the serial connection, with a specific packet structure.
+    The function waits for a valid packet to be received within the specified timeout.
+    The packet structure is as follows:
+    - Start marker (1 byte): 0xFE
+    - Length of the payload (1 byte)
+    - Payload (up to 32 bytes)
+    - Checksum (1 byte): XOR of the length and all payload bytes
+    - End marker (1 byte): 0xFF
+    If a valid packet is received, the payload is returned as a string. If no valid packet is received within the timeout, a TimeoutError is raised.
+    """
 
-# Invia il comando per muovere il servo a 90 gradi
-send_data('90')
+    deadline = time.time() + timeout_s
 
-# Attende la risposta da Arduino prima di chiudere
-time.sleep(0.5) 
-while arduino.in_waiting > 0:
-    risposta = arduino.readline().decode('utf-8', errors='ignore').strip()
-    print(f"Risposta da Arduino: {risposta}")
+    while time.time() < deadline:
+        b = arduino.read(1)
+        if not b:
+            continue
+        if b[0] != START_MARKER:
+            continue
 
-# Invia il comando per muovere il servo a 90 gradi
-send_data('0')
+        length_b = arduino.read(1)
+        if not length_b:
+            continue
+        length = length_b[0]
+        if length == 0 or length > MAX_PAYLOAD:
+            continue
 
-# Attende la risposta da Arduino prima di chiudere
-time.sleep(0.5) 
-while arduino.in_waiting > 0:
-    risposta = arduino.readline().decode('utf-8', errors='ignore').strip()
-    print(f"Risposta da Arduino: {risposta}")
+        payload = arduino.read(length)
+        checksum_b = arduino.read(1)
+        end_b = arduino.read(1)
 
-arduino.close() 
+        if len(payload) != length or not checksum_b or not end_b:
+            continue
+        if end_b[0] != END_MARKER:
+            continue
+
+        expected = calc_checksum(payload)
+        if checksum_b[0] != expected:
+            continue
+
+        return payload.decode('utf-8', errors='ignore')
+
+    raise TimeoutError("Nessuna risposta valida dall'Arduino")
+
+send_data("90")
+print(receive_data())
+
+
+if __name__ == "__main__":
+
+    filename = input("Enter the image filename (with extension): ")
+    filename = "imgs_source/" + filename
+
+    # Image is processed and contours are extracted
+    binarized = img_manager.process_image(filename, (100, 100), 0.5)
+    contours = img_manager.countours_extraction(binarized)
+
+    # Optionally, create an image with only the contours and save it
+    image_contours = img_manager.create_contours_only_image(binarized, contours, pixelized=True)
+    img_manager.save_opencv_image(image_contours, os.path.basename(filename))
