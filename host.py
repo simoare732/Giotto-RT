@@ -86,9 +86,6 @@ def receive_data(timeout_s=2.0):
 
     raise TimeoutError("Nessuna risposta valida dall'Arduino")
 
-send_data("90")
-print(receive_data())
-
 
 if __name__ == "__main__":
 
@@ -100,5 +97,20 @@ if __name__ == "__main__":
     contours = img_manager.countours_extraction(binarized)
 
     # Optionally, create an image with only the contours and save it
-    image_contours = img_manager.create_contours_only_image(binarized, contours, pixelized=True)
+    image_contours = img_manager.create_contours_only_image(binarized, contours)
     img_manager.save_opencv_image(image_contours, os.path.basename(filename))
+
+    # Send the contours data to the Arduino
+    for contour in contours:
+
+        contour_str = str(contour[0][0][0]) + "," + str(contour[0][0][1]) + ",0"
+        
+        send_data(contour_str)
+        print(f"Sent contour: {contour_str}")
+
+        try:
+            response = receive_data(timeout_s=2.0)
+            print(f"Received response: {response}")
+            time.sleep(1)  # Optional delay between sending contours
+        except TimeoutError as e:
+            print(e)

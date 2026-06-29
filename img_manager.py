@@ -107,10 +107,11 @@ def create_contours_only_image(image_array, contours, pixelized = False):
 
     return contour_image
 
-def convert_pixels_to_millimeters(pixel_count, dpi=300):
+def convert_pixels_to_millimeters():
     pass
 
 
+'''
 if __name__ == "__main__":
     image_path = "imgs_source/cat.png"
 
@@ -131,3 +132,4 @@ if __name__ == "__main__":
     # 4. Save and show result
     filename = os.path.basename(image_path)
     save_opencv_image(contours_only, filename)
+    '''
