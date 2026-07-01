@@ -1,6 +1,8 @@
 #include <Servo.h>
 #include <Arduino_FreeRTOS.h>
 #include <queue.h>
+#include <semphr.h>
+
 
 // The packet from HOST will contain these information in format angleDx,angleSx,state
 struct Point{
@@ -8,15 +10,14 @@ struct Point{
   uint8_t angleSx;
   bool state; // true = pen down, false = pen up
 };
+Point currentPoint;  // Global variable to store the current point being processed
+SemaphoreHandle_t mut;  // Semaphore to protect access to currentPoint
 
 QueueHandle_t queue;
+const uint8_t QUEUE_SIZE = 20;
 
 Servo pen;
 int pinPen = 2;
-
-int angleArmSx = 0;
-int angleArmDx = 0;
-bool PositionPen = false; // true = pen down, false = pen up
 
 const byte START_MARKER = 0xFE;
 const byte END_MARKER   = 0xFF;
@@ -34,7 +35,7 @@ enum ReadState{
 };
 
 const uint8_t T_te = 20;  // Task Engine Period
-const uint8_t T_ape = 20;  // Aperiodic Server Period
+const uint8_t T_tt = 100;  // Task Telemetry Period
 
 // Function to calculate checksum using XOR operation
 byte calcChecksum(const byte* data, byte len);
@@ -51,14 +52,21 @@ void TaskRec(void *pvParameters);
 // Task to process points from the queue and control the servo
 void TaskEngine(void *pvParameters);
 
+// Task to send telemetry data over the serial port
+void TaskTelemetry(void *pvParameters);
+
 void setup() {
   Serial.begin(9600);
   pen.attach(pinPen);
 
-  queue = xQueueCreate(20, sizeof(Point));
+  mut = xSemaphoreCreateMutex();
+
+  queue = xQueueCreate(QUEUE_SIZE, sizeof(Point));
       
   xTaskCreate(TaskRec, "TaskRx", 220, NULL, 2, NULL);
   xTaskCreate(TaskEngine, "TaskEngine", 220, NULL, 3, NULL);
+  xTaskCreate(TaskTelemetry, "TaskTelemetry", 140, NULL, 1, NULL);
+
   vTaskStartScheduler();
 }
 
@@ -113,7 +121,7 @@ void TaskRec(void *pvParameters) {
         case WAIT_END:
           if (b == END_MARKER) {
 
-            tempoInizio = micros();
+            //tempoInizio = micros();
             
             data[idx] = '\0';
             Point newP;
@@ -134,12 +142,8 @@ void TaskRec(void *pvParameters) {
               
             }
 
-            tempoFine = micros();
-            tempoEsecuzione = tempoFine - tempoInizio;
-
-            //char ackBuffer[32];
-            //sprintf(ackBuffer, "Time TaskRec: %lu", tempoEsecuzione);
-            //sendPacket(ackBuffer);
+            //tempoFine = micros();
+            //tempoEsecuzione = tempoFine - tempoInizio;
             
             state = WAIT_START;
           } else {
@@ -175,15 +179,52 @@ void TaskEngine(void *pvParameters){
       //tempoInizio = micros();
       pen.write(p.angleDx);
 
+      if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE) {
+        
+        currentPoint.angleDx = p.angleDx;
+        currentPoint.angleSx = p.angleSx;
+        currentPoint.state   = p.state;
+
+        xSemaphoreGive(mut);
+      }
+
       //tempoFine = micros();
       //tempoEsecuzione = tempoFine - tempoInizio;
 
       
-      sprintf(ackBuffer, "Angle set to: %d", p.angleDx);
-      sendPacket(ackBuffer);
+      //sprintf(ackBuffer, "Angle set to: %d", p.angleDx);
+      //sendPacket(ackBuffer);
     }
 
     vTaskDelayUntil(&xLastWakeTime, xPeriod); // Wait for the next cycle
+  }
+}
+
+
+void TaskTelemetry(void *pvParameters) {
+  char telBuffer[32];
+  
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xPeriod = pdMS_TO_TICKS(T_tt); 
+
+  for (;;) {
+    // Get the number of messages currently in the queue
+    int nQueue = uxQueueMessagesWaiting(queue);
+
+    if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE) {
+      
+      sprintf(telBuffer, "%d,%d,%d,%d", nQueue, currentPoint.angleDx, currentPoint.angleSx, currentPoint.state);
+
+      xSemaphoreGive(mut);
+    } else {
+      // If the mutex is not available, send an error message
+      sprintf(telBuffer, "ERR: Mutex Timeout");
+    }
+    
+    sendPacket(telBuffer);
+
+    // Task blocked until the next cycle
+    vTaskDelayUntil(&xLastWakeTime, xPeriod);
   }
 }
 

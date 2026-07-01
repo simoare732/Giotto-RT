@@ -2,6 +2,8 @@ import serial
 import time
 import img_manager
 import os
+import re
+import threading
 
 serial_port = '/dev/ttyACM0'
 baud_rate = 9600
@@ -11,6 +13,10 @@ time.sleep(2)
 START_MARKER = 0xFE
 END_MARKER = 0xFF
 MAX_PAYLOAD = 32
+
+THRESHOLD_FULL_QUEUE = 15 # Threshold for the number of points in the queue before stopping sending new points
+QUEUE_LEVEL = 0 # Current number of points in the queue, updated based on telemetry data
+TELEMETRY = []
 
 
 def calc_checksum(data):
@@ -87,6 +93,26 @@ def receive_data(timeout_s=2.0):
     raise TimeoutError("Nessuna risposta valida dall'Arduino")
 
 
+def read_telemetry():
+    global QUEUE_LEVEL, TELEMETRY
+
+    pattern = r'^\d+,\d+,\d+,\d+$'
+    while True:
+        try:
+
+            tel = receive_data().strip()
+
+            if re.match(pattern, tel):
+                val = [int(x) for x in tel.split(',')]
+                QUEUE_LEVEL = val[0]  # Update the global QUEUE_LEVEL variable with the first value from telemetry
+                TELEMETRY.append(val)
+            else:
+                val = tel
+        
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
 
     filename = input("Enter the image filename (with extension): ")
@@ -100,17 +126,21 @@ if __name__ == "__main__":
     image_contours = img_manager.create_contours_only_image(binarized, contours)
     img_manager.save_opencv_image(image_contours, os.path.basename(filename))
 
+
+    listener = threading.Thread(target=read_telemetry, daemon=True)
+    listener.start()
+
     # Send the contours data to the Arduino
     for contour in contours:
 
         contour_str = str(contour[0][0][0]) + "," + str(contour[0][0][1]) + ",0"
+
+        while QUEUE_LEVEL > THRESHOLD_FULL_QUEUE:
+            print(f"Queue is full ({QUEUE_LEVEL}), waiting to send new points...  ")
+            time.sleep(0.05)
         
         send_data(contour_str)
         print(f"Sent contour: {contour_str}")
 
-        try:
-            response = receive_data(timeout_s=2.0)
-            print(f"Received response: {response}")
-            time.sleep(1)  # Optional delay between sending contours
-        except TimeoutError as e:
-            print(e)
+        time.sleep(0.005)
+
