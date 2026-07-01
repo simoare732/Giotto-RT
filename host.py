@@ -1,9 +1,12 @@
+import queue
+
 import serial
 import time
 import img_manager
 import os
 import re
 import threading
+import gui_manager
 
 serial_port = '/dev/ttyACM0'
 baud_rate = 9600
@@ -93,7 +96,10 @@ def receive_data(timeout_s=2.0):
     raise TimeoutError("Nessuna risposta valida dall'Arduino")
 
 
-def read_telemetry():
+def read_telemetry(queue_tel):
+    """
+    Continuously read telemetry data from the Arduino and update the global QUEUE_LEVEL and TELEMETRY variables.
+    """
     global QUEUE_LEVEL, TELEMETRY
 
     pattern = r'^\d+,\d+,\d+,\d+$'
@@ -106,6 +112,8 @@ def read_telemetry():
                 val = [int(x) for x in tel.split(',')]
                 QUEUE_LEVEL = val[0]  # Update the global QUEUE_LEVEL variable with the first value from telemetry
                 TELEMETRY.append(val)
+
+                queue_tel.put(val)  # Put the telemetry data into the queue for GUI updates
             else:
                 val = tel
         
@@ -113,10 +121,12 @@ def read_telemetry():
             pass
 
 
-if __name__ == "__main__":
-
-    filename = input("Enter the image filename (with extension): ")
-    filename = "imgs_source/" + filename
+def send_contours(filename, queue_points):
+    """
+    Process the given image file to extract contours and send them to the Arduino, while also updating the GUI with the points.
+    The function processes the image, extracts contours, and sends each contour point to the Arduino.
+    """
+    global QUEUE_LEVEL
 
     # Image is processed and contours are extracted
     binarized = img_manager.process_image(filename, (100, 100), 0.5)
@@ -126,11 +136,7 @@ if __name__ == "__main__":
     image_contours = img_manager.create_contours_only_image(binarized, contours)
     img_manager.save_opencv_image(image_contours, os.path.basename(filename))
 
-
-    listener = threading.Thread(target=read_telemetry, daemon=True)
-    listener.start()
-
-    # Send the contours data to the Arduino
+     # Send the contours data to the Arduino
     for contour in contours:
 
         contour_str = str(contour[0][0][0]) + "," + str(contour[0][0][1]) + ",0"
@@ -142,5 +148,30 @@ if __name__ == "__main__":
         send_data(contour_str)
         print(f"Sent contour: {contour_str}")
 
-        time.sleep(0.005)
+        queue_points.put((contour[0][0][0], contour[0][0][1]))  # Put the point into the queue for GUI updates
+        
+
+        time.sleep(1)
+
+
+
+
+if __name__ == "__main__":
+
+    filename = input("Enter the image filename (with extension): ")
+    filename = "imgs_source/" + filename
+
+    queue_tel = queue.Queue()
+    queue_points = queue.Queue()
+
+
+    listener = threading.Thread(target=read_telemetry, args=(queue_tel,), daemon=True)
+    listener.start()
+
+
+    thread_invio = threading.Thread(target=send_contours, args=(filename, queue_points), daemon=True)
+    thread_invio.start()
+    
+    app = gui_manager.FinestraDisegno(queue_points, queue_tel, larghezza=500, altezza=500)
+    app.avvia()
 
