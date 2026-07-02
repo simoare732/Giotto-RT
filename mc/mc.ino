@@ -8,7 +8,7 @@
 struct Point{
   uint8_t angleDx;
   uint8_t angleSx;
-  bool state; // true = pen down, false = pen up
+  uint8_t state;
 };
 Point currentPoint;  // Global variable to store the current point being processed
 SemaphoreHandle_t mut;  // Semaphore to protect access to currentPoint
@@ -17,7 +17,12 @@ QueueHandle_t queue;
 const uint8_t QUEUE_SIZE = 20;
 
 Servo pen;
-int pinPen = 2;
+Servo servoDx;
+Servo servoSx;
+
+int pinPen = 3;
+int pinServoDx = 2;
+int pinServoSx = 4;
 
 const byte START_MARKER = 0xFE;
 const byte END_MARKER   = 0xFF;
@@ -46,6 +51,9 @@ bool readPacket(byte* data, byte& len);
 // Function to send a packet over the serial port
 void sendPacket(const char* msg);
 
+// Function to control the motion of the servo based on the angles and pen state
+void motionServo(int &angleStart, int angleDest, int speed);
+
 // Task to receive packets from the serial port and put them into the queue
 void TaskRec(void *pvParameters);
 
@@ -56,8 +64,15 @@ void TaskEngine(void *pvParameters);
 void TaskTelemetry(void *pvParameters);
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
+
+  pen.write(90);  // Initialize pen to a neutral position
+  servoDx.writeMicroseconds(1500);  // Initialize servoDx to a neutral position
+  servoSx.writeMicroseconds(1500);  // Initialize servoSx to a neutral position
+
   pen.attach(pinPen);
+  servoDx.attach(pinServoDx);
+  servoSx.attach(pinServoSx);
 
   mut = xSemaphoreCreateMutex();
 
@@ -136,7 +151,7 @@ void TaskRec(void *pvParameters) {
             if (fields == 3) {
               newP.angleDx = tempDx;
               newP.angleSx = tempSx;
-              newP.state   = (tempState != 0);
+              newP.state   = tempState;
 
               xQueueSend(queue, &newP, portMAX_DELAY); 
               
@@ -163,7 +178,21 @@ void TaskRec(void *pvParameters) {
 
 void TaskEngine(void *pvParameters){
   Point p;
-  char ackBuffer[32];
+
+  const int MIN_PULSE = 500;
+  const int MAX_PULSE = 2500;
+  
+  // Speed of drawing 
+  const int stepUs = 10; 
+
+  // Variables for the current and target pulse widths for the servos
+  static int correnteDxUs = 1500;
+  static int targetDxUs   = 1500;
+  
+  static int correnteSxUs = 1500;
+  static int targetSxUs   = 1500;
+
+  static bool target = false;  // Flag to indicate if there is already a target to reach
 
   unsigned long tempoInizio;
   unsigned long tempoFine;
@@ -175,25 +204,50 @@ void TaskEngine(void *pvParameters){
 
   for (;;) {
 
-    if (xQueueReceive(queue, &p, 0) == pdPASS) {
-      //tempoInizio = micros();
-      pen.write(p.angleDx);
+    // If there is no target, try to get a new point from the queue
+    if(!target){
+      if (xQueueReceive(queue, &p, 0) == pdPASS){
+        targetDxUs = map(p.angleDx, 0, 180, MIN_PULSE, MAX_PULSE);
+        targetSxUs = map(p.angleSx, 0, 180, MIN_PULSE, MAX_PULSE);
 
-      if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE) {
-        
-        currentPoint.angleDx = p.angleDx;
-        currentPoint.angleSx = p.angleSx;
+        if(p.state != currentPoint.state){
+          pen.write(p.state);
+
+          // Wait for 150ms to allow the pen to move up or down before continuing
+          vTaskDelay(pdMS_TO_TICKS(150)); 
+          
+          // The period of the task start over from now 
+          xLastWakeTime = xTaskGetTickCount();
+        }
+
+        target = true;
+      }
+    }
+
+    // If there is a target, move the servos towards the target angles
+    if(target){
+
+      // Compute the new pulse width for the right servo
+      motionServo(correnteDxUs, targetDxUs, stepUs);
+
+      // Compute the new pulse width for the left servo
+      motionServo(correnteSxUs, targetSxUs, stepUs);
+
+      servoDx.writeMicroseconds(correnteDxUs);
+      servoSx.writeMicroseconds(correnteSxUs);
+
+      // Update telemetry with the current angles
+      if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE){
+        currentPoint.angleDx = map(correnteDxUs, MIN_PULSE, MAX_PULSE, 0, 180);
+        currentPoint.angleSx = map(correnteSxUs, MIN_PULSE, MAX_PULSE, 0, 180);
         currentPoint.state   = p.state;
 
         xSemaphoreGive(mut);
       }
 
-      //tempoFine = micros();
-      //tempoEsecuzione = tempoFine - tempoInizio;
-
-      
-      //sprintf(ackBuffer, "Angle set to: %d", p.angleDx);
-      //sendPacket(ackBuffer);
+      if(correnteDxUs == targetDxUs && correnteSxUs == targetSxUs){
+        target = false;  // Target reached, reset the flag
+      }
     }
 
     vTaskDelayUntil(&xLastWakeTime, xPeriod); // Wait for the next cycle
@@ -305,5 +359,17 @@ void sendPacket(const char* msg) {
 
   Serial.write(cs);
   Serial.write(END_MARKER);
-  Serial.flush();
+}
+
+
+void motionServo(int &angleStart, int angleDest, int speed) {
+  // Move the angleStart towards angleDest by speed units
+  if(angleStart < angleDest){
+    angleStart += speed;
+    if(angleStart > angleDest) angleStart = angleDest;
+  } else if (angleStart > angleDest){
+    angleStart -= speed;
+    if(angleStart < angleDest) angleStart = angleDest;
+  }
+
 }

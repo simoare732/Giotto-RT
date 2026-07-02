@@ -1,4 +1,7 @@
 import queue
+from flask import Flask, render_template, request, jsonify
+from flask_socketio import SocketIO
+from werkzeug.utils import secure_filename
 
 import serial
 import time
@@ -6,10 +9,20 @@ import img_manager
 import os
 import re
 import threading
-import gui_manager
+import yaml
+
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+
+# --- CONFIGURAZIONE SERVER WEB ---
+app = Flask(__name__)
+# Evita un avviso di sicurezza su Flask
+app.config['SECRET_KEY'] = 'segreto_super_sicuro' 
+# Inizializza SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 serial_port = '/dev/ttyACM0'
-baud_rate = 9600
+baud_rate = 115200
 arduino = serial.Serial(port=serial_port, baudrate=baud_rate, timeout=0.2, write_timeout=1)
 time.sleep(2)
 
@@ -20,6 +33,9 @@ MAX_PAYLOAD = 32
 THRESHOLD_FULL_QUEUE = 15 # Threshold for the number of points in the queue before stopping sending new points
 QUEUE_LEVEL = 0 # Current number of points in the queue, updated based on telemetry data
 TELEMETRY = []
+
+is_drawing = False  # Global flag to indicate if the drawing process is active
+UPLOAD_FOLDER = 'imgs_source'  # Directory where uploaded images will be saved
 
 
 def calc_checksum(data):
@@ -110,10 +126,11 @@ def read_telemetry(queue_tel):
 
             if re.match(pattern, tel):
                 val = [int(x) for x in tel.split(',')]
+                val[3] = 1 if val[3] == config["giotto_config"]["pen_down_angle"] else 0  # Convert pen angle to binary state
                 QUEUE_LEVEL = val[0]  # Update the global QUEUE_LEVEL variable with the first value from telemetry
                 TELEMETRY.append(val)
 
-                queue_tel.put(val)  # Put the telemetry data into the queue for GUI updates
+                socketio.emit("Update telemetry", val)  # Send the telemetry data to the web client via SocketIO
             else:
                 val = tel
         
@@ -126,20 +143,45 @@ def send_contours(filename, queue_points):
     Process the given image file to extract contours and send them to the Arduino, while also updating the GUI with the points.
     The function processes the image, extracts contours, and sends each contour point to the Arduino.
     """
-    global QUEUE_LEVEL
+    global QUEUE_LEVEL, is_drawing
+
+    is_drawing = True  # Set the drawing flag to True when starting the drawing process
+
+    socketio.emit("Clear canvas")  # Notify the web client to clear the canvas
 
     # Image is processed and contours are extracted
-    binarized = img_manager.process_image(filename, (100, 100), 0.5)
+    target_x, target_y = config["image_config"]["image_width"], config["image_config"]["image_height"]
+    thres = config["image_config"]["threshold"]
+    binarized = img_manager.process_image(filename, (target_x, target_y), thres)
     contours = img_manager.countours_extraction(binarized)
 
     # Optionally, create an image with only the contours and save it
     image_contours = img_manager.create_contours_only_image(binarized, contours)
     img_manager.save_opencv_image(image_contours, os.path.basename(filename))
 
-     # Send the contours data to the Arduino
-    for contour in contours:
+    # Create the path (in pixels) from the contours
+    path_pixel = img_manager.draw_contours(contours)
 
-        contour_str = str(contour[0][0][0]) + "," + str(contour[0][0][1]) + ",0"
+    path_mm = img_manager.convert_pixels_to_millimeters(path_pixel, target_x, target_y)
+
+     # Send the contours data to the Arduino
+    for p in path_mm:
+        x = int(p["x"])
+        y = int(p["y"])
+        state = p["state"]  # True for pen down, False for pen up
+
+        if state:
+            z = config["giotto_config"]["pen_down_angle"]  # Use the configured pen down angle
+        else:
+            z = config["giotto_config"]["pen_up_angle"]  # Use the configured pen up angle
+
+        ang_Rx, ang_Sx = img_manager.compute_kinematics(x, y)
+
+        if ang_Sx is None or ang_Rx is None:
+            print(f"Point ({x}, {y}) is unreachable. Skipping...")
+            continue  # Skip this point if it's unreachable
+
+        contour_str = f"{ang_Rx},{ang_Sx},{z}"
 
         while QUEUE_LEVEL > THRESHOLD_FULL_QUEUE:
             print(f"Queue is full ({QUEUE_LEVEL}), waiting to send new points...  ")
@@ -148,30 +190,62 @@ def send_contours(filename, queue_points):
         send_data(contour_str)
         print(f"Sent contour: {contour_str}")
 
-        queue_points.put((contour[0][0][0], contour[0][0][1]))  # Put the point into the queue for GUI updates
+        socketio.emit("Update points", {'x': x, 'y': y, 'state': state})  # Send the point to the web client via SocketIO
+
+        time.sleep(0.01)  # Small delay to avoid overwhelming the Arduino
         
+    
+    is_drawing = False  # Set the drawing flag to False when the drawing process is complete
+    socketio.emit("Drawing complete")  # Notify the web client that the drawing process is complete
 
-        time.sleep(1)
+    time.sleep(1)
 
 
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    global is_drawing
+    
+    if is_drawing:
+        return jsonify({'error': 'La macchina sta già disegnando. Attendi la fine.'}), 400
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'Nessun file ricevuto.'}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'Nessun file selezionato.'}), 400
+    
+    if file:
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(filepath)
+
+        # Usiamo ancora queue_points per mantenere intatta la firma della tua funzione
+        queue_points = queue.Queue()
+
+        # Avvia il processo in background
+        thread_invio = threading.Thread(target=send_contours, args=(filepath, queue_points), daemon=True)
+        thread_invio.start()
+
+        return jsonify({'message': 'File salvato e processo di disegno avviato.'}), 200
 
 
 if __name__ == "__main__":
 
-    filename = input("Enter the image filename (with extension): ")
-    filename = "imgs_source/" + filename
+    #filename = input("Enter the image filename (with extension): ")
+    #filename = "imgs_source/" + filename
 
     queue_tel = queue.Queue()
-    queue_points = queue.Queue()
-
 
     listener = threading.Thread(target=read_telemetry, args=(queue_tel,), daemon=True)
     listener.start()
 
+    print("Server is running. Access the web interface at http://localhost:5000")
 
-    thread_invio = threading.Thread(target=send_contours, args=(filename, queue_points), daemon=True)
-    thread_invio.start()
-    
-    app = gui_manager.FinestraDisegno(queue_points, queue_tel, larghezza=500, altezza=500)
-    app.avvia()
+    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
 

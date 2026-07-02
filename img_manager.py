@@ -2,6 +2,11 @@ import cv2
 from PIL import Image
 import os
 import numpy as np
+import math
+import yaml
+
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
 
 def load_grayscale_image(image_path):
     """
@@ -107,8 +112,109 @@ def create_contours_only_image(image_array, contours, pixelized = False):
 
     return contour_image
 
-def convert_pixels_to_millimeters():
-    pass
+
+def draw_contours(contours):
+    """
+    Transform coordinates of contours in a path.
+    """
+    path = []
+
+    for contour in contours:
+        if len(contour) < 2:
+            continue  # Skip contours with less than 2 points
+        
+        # Go on the first point of contour
+        first_point = contour[0][0]
+        x, y = first_point[0], first_point[1]
+        path.append({"x": x, "y": y, "state":False})
+
+        path.append({"x": x, "y": y, "state":True})
+
+        # Start tracking the contour
+        for i in range(1, len(contour)):
+            point = contour[i][0]
+            x, y = point[0], point[1]
+            path.append({"x": x, "y": y, "state":True})
+
+        
+        # Once the contour is finished, lift the pen
+        last_point = contour[-1][0]
+        x, y = last_point[0], last_point[1]
+        path.append({"x": x, "y": y, "state":False})
+
+    return path
+
+
+
+def convert_pixels_to_millimeters(path, img_width, img_height):
+    """
+    Converts the pixel coordinates in the path to millimeter coordinates based on the drawing area (sheet) dimensions.
+    """
+    # Parameters of the drawing area (sheet) (in millimeters)
+    sheet_width= config["sheet_config"]["sheet_width"]
+    sheet_height= config["sheet_config"]["sheet_height"]
+    offset_y = config["sheet_config"]["offset_y"]    # How distant are the motors from the sheet
+
+    scale = min(sheet_width / img_width, sheet_height / img_height)
+
+    offset_x = -(img_width * scale)/2
+
+    sheet_path = []
+    for p in path:
+        x = (p["x"] * scale) + offset_x
+        y = (p["y"] * scale) + offset_y
+
+        sheet_path.append({"x": x, "y": y, "state": p["state"]})
+
+    return sheet_path
+
+
+def compute_kinematics(x ,y):
+    """
+    Compute the angles for the servos based on the desired x and y coordinates of the pen.
+    """
+
+    d = config["giotto_config"]["servo_distance"]  # Distance between the two servos (mm)
+    L1 = config["giotto_config"]["L1"]  # Length of the first arm connected to the servo (mm)
+    L2 = config["giotto_config"]["L2"]  # Length of the second arm connected to the pen (mm)
+
+    x_L = -d/2
+    x_R = d/2
+
+    # Distance from servo to the target
+    D_L = math.hypot(x - x_L, y)
+    D_R = math.hypot(x - x_R, y)
+
+    # Check if the target is reachable
+    if D_L > (L1 + L2) or D_R > (L1 + L2) or D_L < abs(L1 - L2) or D_R < abs(L1 - L2):
+        print(f"Target ({x}, {y}) is out of reach.")
+        return None, None
+    
+    # Compute angle of vector
+    beta_L = math.atan2(y, x - x_L)
+    beta_R = math.atan2(y, x - x_R)
+
+    # Cosin theorem to find out the bend angles
+    cos_a_L = (L1**2 + D_L**2 - L2**2) / (2 * L1 * D_L)
+    cos_a_R = (L1**2 + D_R**2 - L2**2) / (2 * L1 * D_R)
+
+    # Avoid approximation errors
+    cos_a_L = max(-1, min(1, cos_a_L))
+    cos_a_R = max(-1, min(1, cos_a_R))
+
+    alpha_L = math.acos(cos_a_L)
+    alpha_R = math.acos(cos_a_R)
+
+    # Compute angles
+    theta_L = beta_L + alpha_L
+    theta_R = beta_R + alpha_R
+
+    # Convert radiants in degrees
+    angle_L = math.degrees(theta_L)
+    angle_R = math.degrees(theta_R)
+
+    return int(angle_R), int(angle_L)
+
 
 
 '''

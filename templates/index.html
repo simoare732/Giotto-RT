@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Pannello di Controllo Macchina</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            margin: 0;
+            background-color: #2c3e50;
+            color: white;
+        }
+        #telemetria-panel {
+            width: 30%;
+            padding: 20px;
+            background-color: #34495e;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+        }
+        #canvas-panel {
+            width: 70%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #ecf0f1;
+        }
+        canvas {
+            background-color: white;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            border: 1px solid #bdc3c7; 
+        }
+        .dato {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            font-family: monospace;
+        }
+        .upload-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #7f8c8d;
+        }
+        button {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #27ae60;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #2ecc71;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="telemetria-panel">
+        <h2>Dati Telemetria</h2>
+        <hr>
+        <div class="dato" id="queue-level">Queue Level: In attesa...</div>
+        <div class="dato" id="val2">Angolo Dx (gradi): In attesa...</div>
+        <div class="dato" id="val3">Angolo Sx (gradi): In attesa...</div>
+        <div class="dato" id="val4">Stato Penna: In attesa...</div>
+
+        <div class="upload-section">
+            <h3>Nuovo Disegno</h3>
+            <input type="file" id="image-upload" accept="image/*">
+            <button onclick="caricaImmagine()">Invia e Disegna</button>
+            <p id="upload-status" style="font-size: 0.9em; color: #f1c40f;"></p>
+        </div>
+    </div>
+
+    <div id="canvas-panel">
+        <canvas id="foglio" width="500" height="500"></canvas>
+    </div>
+
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('foglio');
+        const ctx = canvas.getContext('2d');
+        
+        // --- PARAMETRI DI VISUALIZZAZIONE ---
+        const SCALA = 5; 
+        const CENTRO_X = canvas.width / 2; // Sposta lo "Zero" della X al centro del canvas (250px)
+        
+        // Inserisci qui lo stesso offset_y che hai nel file config.yaml
+        const OFFSET_Y_PYTHON = 40; 
+        
+        // Un margine visivo per non appiccicare il disegno al bordo superiore
+        const MARGINE_ALTO = 30; 
+        // ------------------------------------
+
+        let lastX = null;
+        let lastY = null;
+
+        // 1. Ascolto dei dati di Telemetria
+        socket.on('Update telemetry', function(dati) {
+            document.getElementById('queue-level').innerText = "Queue Level: " + dati[0];
+            document.getElementById('val2').innerText = "Angolo Dx: " + dati[1] + "°";
+            document.getElementById('val3').innerText = "Angolo Sx: " + dati[2] + "°";
+            document.getElementById('val4').innerText = "Stato Penna: " + (dati[3] === 1 ? "Giù" : "Su");
+        });
+
+        // 2. Ascolto dei nuovi punti da disegnare
+        socket.on('Update points', function(punto) {
+            
+            // TRASLAZIONE DELLE COORDINATE
+            const x = (punto.x * SCALA) + CENTRO_X;
+            const y = ((punto.y - OFFSET_Y_PYTHON) * SCALA) + MARGINE_ALTO;
+            const state = punto.state; 
+
+            if (state === false) {
+                lastX = x;
+                lastY = y;
+            } else {
+                if (lastX !== null && lastY !== null) {
+                    ctx.beginPath();
+                    ctx.moveTo(lastX, lastY);
+                    ctx.lineTo(x, y);
+                    ctx.strokeStyle = '#2c3e50'; 
+                    ctx.lineWidth = 2; 
+                    ctx.stroke();
+                }
+                lastX = x;
+                lastY = y;
+            }
+        });
+
+        // 3. Pulisce il canvas prima di un nuovo disegno
+        socket.on('Clear canvas', function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('upload-status').innerText = "Disegno in corso...";
+            lastX = null;
+            lastY = null;
+        });
+
+        socket.on('Drawing complete', function() {
+            document.getElementById('upload-status').innerText = "Disegno completato!";
+        });
+
+        // 4. Funzione per inviare l'immagine al server Python
+        function caricaImmagine() {
+            const fileInput = document.getElementById('image-upload');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert("Seleziona un'immagine prima di inviare!");
+                return;
+            }
+
+            document.getElementById('upload-status').innerText = "Elaborazione...";
+            
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if(data.error) {
+                    alert("Errore: " + data.error);
+                    document.getElementById('upload-status').innerText = "";
+                } else {
+                    console.log(data.message);
+                }
+            })
+            .catch(error => {
+                console.error("Errore di rete:", error);
+                document.getElementById('upload-status').innerText = "Errore di connessione.";
+            });
+        }
+    </script>
+</body>
+</html>

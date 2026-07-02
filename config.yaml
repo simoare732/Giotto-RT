@@ -1,0 +1,16 @@
+image_config:
+  image_width: 100  # Width of the image in millimeters
+  image_height: 100  # Height of the image in millimeters
+  threshold: 0.5  # Threshold for binarization (0 to 1)
+
+sheet_config:
+  sheet_width: 80  # Width of the sheet in millimeters
+  sheet_height: 80  # Height of the sheet in millimeters
+  offset_y: 50
+
+giotto_config:
+  servo_distance: 25.8  # Distance between the two servos (mm)
+  L1: 60.0  # Length of the first arm connected to the servo (mm)
+  L2: 70.0  # Length of the second arm connected to the pen (mm)
+  pen_up_angle: 0  # Angle for pen up position (degrees)
+  pen_down_angle: 90  # Angle for pen down position (degrees)
