@@ -4,6 +4,7 @@ import os
 import numpy as np
 import math
 import yaml
+import cv2
 
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
@@ -16,6 +17,17 @@ def load_grayscale_image(image_path):
     if i is None:
         raise FileNotFoundError(f"Can't read image from path: {image_path}")
     return i
+
+
+def is_black_and_white(image):
+    """
+    Checks if the image is black and white by verifying that all pixel values are either 0 or 255.
+    """
+    val = np.unique(image)
+    is_bw = np.all(np.isin(val, [0, 255]))
+
+    return is_bw
+
 
 def calculate_and_downsample(image_array, target_size):
     """
@@ -57,14 +69,18 @@ def process_image(image_path, target_size, threshold):
     """
     # 1. Image reading
     i = load_grayscale_image(image_path)
+
+    # 2. Check if the image is black and white
+    if is_black_and_white(i):
+        binarized_array = cv2.resize(i, target_size, interpolation=cv2.INTER_NEAREST)
+    else:
+        # 3. Downsampling
+        downsampled = calculate_and_downsample(i, target_size)
+        
+        # 4. Binarization
+        binarized_array = apply_thresholding(downsampled, threshold)
     
-    # 2. Downsampling
-    downsampled = calculate_and_downsample(i, target_size)
-    
-    # 3. Binarization
-    binarized_array = apply_thresholding(downsampled, threshold)
-    
-    # 4. Save to disk
+    # 5. Save to disk
     #filename = os.path.basename(image_path)
     #save_opencv_image(binarized_array, filename)
     
@@ -237,5 +253,4 @@ if __name__ == "__main__":
 
     # 4. Save and show result
     filename = os.path.basename(image_path)
-    save_opencv_image(contours_only, filename)
-    '''
+    save_opencv_image(contours_only, filename)'''

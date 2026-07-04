@@ -3,20 +3,21 @@
 #include <queue.h>
 #include <semphr.h>
 
-
 // The packet from HOST will contain these information in format angleDx,angleSx,state
 struct Point{
   uint8_t angleDx;
   uint8_t angleSx;
   uint8_t state;
 };
+
 Point currentPoint;  // Global variable to store the current point being processed
 SemaphoreHandle_t mut;  // Semaphore to protect access to currentPoint
 
-QueueHandle_t queue;
-const uint8_t QUEUE_SIZE = 20;
+QueueHandle_t queue;    // Queue to hold points received from the HOST
+const uint8_t QUEUE_SIZE = 20;  // Maximum number of points that can be held in the queue
 
-Servo pen;
+// Servo objects to control the pen and the two servos
+Servo pen;     
 Servo servoDx;
 Servo servoSx;
 
@@ -24,6 +25,7 @@ int pinPen = 3;
 int pinServoDx = 2;
 int pinServoSx = 4;
 
+// Constants for packet markers (start and end) and maximum payload size
 const byte START_MARKER = 0xFE;
 const byte END_MARKER   = 0xFF;
 const byte MAX_PAYLOAD  = 32;
@@ -31,6 +33,7 @@ const byte MAX_PAYLOAD  = 32;
 byte payload[MAX_PAYLOAD+1];
 byte payloadLen = 0;
 
+// Enum to represent the different states of reading a packet from the serial port
 enum ReadState{
   WAIT_START,
   READ_LEN,
@@ -87,17 +90,16 @@ void setup() {
 
 void loop() {}
 
-
+/*
+  TaskRec: This task continuously reads data from the serial port. 
+  It looks for packets that start with a specific marker, followed by a length byte, the payload, a checksum, and an end marker. 
+  When a valid packet is received, it extracts the angles and state from the payload and sends them to the queue for processing by the TaskEngine.
+*/
 void TaskRec(void *pvParameters) {
   static ReadState state = WAIT_START;
   static byte expectedLen = 0;
   static byte idx = 0;
   static byte checksum = 0;
-
-
-  unsigned long tempoInizio;
-  unsigned long tempoFine;
-  unsigned long tempoEsecuzione;
   
   // Local buffer of task to store payload
   byte data[MAX_PAYLOAD]; 
@@ -136,8 +138,6 @@ void TaskRec(void *pvParameters) {
         case WAIT_END:
           if (b == END_MARKER) {
 
-            //tempoInizio = micros();
-            
             data[idx] = '\0';
             Point newP;
 
@@ -157,9 +157,6 @@ void TaskRec(void *pvParameters) {
               
             }
 
-            //tempoFine = micros();
-            //tempoEsecuzione = tempoFine - tempoInizio;
-            
             state = WAIT_START;
           } else {
             // Reset state if END_MARKER does not correspond
@@ -175,7 +172,12 @@ void TaskRec(void *pvParameters) {
   }
 }
 
-
+/*
+  TaskEngine: This task is responsible for controlling the servos based on the points received from the queue. 
+  It checks if there is a target point to reach. If not, it tries to get a new point from the queue. 
+  If a new point is received, it calculates the target pulse widths for the servos based on the angles and moves the servos towards those targets. 
+  It also updates telemetry data with the current angles and pen state.
+*/
 void TaskEngine(void *pvParameters){
   Point p;
 
@@ -196,7 +198,6 @@ void TaskEngine(void *pvParameters){
 
   unsigned long tempoInizio;
   unsigned long tempoFine;
-  unsigned long tempoEsecuzione;
 
   // The time of last wake up
   TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -211,7 +212,7 @@ void TaskEngine(void *pvParameters){
         targetSxUs = map(p.angleSx, 0, 180, MIN_PULSE, MAX_PULSE);
 
         if(p.state != currentPoint.state){
-          pen.write(p.state);
+          pen.write(p.state);  // Move the pen up or down based on the state
 
           // Wait for 150ms to allow the pen to move up or down before continuing
           vTaskDelay(pdMS_TO_TICKS(150)); 
@@ -232,7 +233,7 @@ void TaskEngine(void *pvParameters){
 
       // Compute the new pulse width for the left servo
       motionServo(correnteSxUs, targetSxUs, stepUs);
-
+      
       servoDx.writeMicroseconds(correnteDxUs);
       servoSx.writeMicroseconds(correnteSxUs);
 
@@ -255,6 +256,9 @@ void TaskEngine(void *pvParameters){
 }
 
 
+/*
+  TaskTelemetry: This task is responsible for sending telemetry data to the host computer.
+*/
 void TaskTelemetry(void *pvParameters) {
   char telBuffer[32];
   
@@ -283,7 +287,10 @@ void TaskTelemetry(void *pvParameters) {
 }
 
 
-
+/*
+  calcChecksum: This function calculates the checksum of a given data array using the XOR operation. 
+  It takes a pointer to the data and its length as parameters and returns the calculated checksum.
+*/
 byte calcChecksum(const byte* data, byte len) {
   byte cs = 0;
   for (byte i = 0; i < len; i++) 
@@ -292,6 +299,12 @@ byte calcChecksum(const byte* data, byte len) {
 }
 
 
+/*
+  readPacket: This function reads a packet from the serial port. 
+  It looks for packets that start with a specific marker, followed by a length byte, the payload, a checksum, and an end marker. 
+  When a valid packet is received, it extracts the payload and its length and returns true. 
+  If no valid packet is found, it returns false.
+*/
 bool readPacket(byte* data, byte& len) {
   static ReadState state = WAIT_START;
   static byte expectedLen = 0;
@@ -342,6 +355,11 @@ bool readPacket(byte* data, byte& len) {
   return false;
 }
 
+/*
+  sendPacket: This function sends a packet over the serial port. 
+  It takes a pointer to the message and its length as parameters. 
+  It calculates the checksum and writes the packet with the appropriate markers.
+*/
 void sendPacket(const char* msg) {
   byte len = strlen(msg);
   if (len > MAX_PAYLOAD) 
@@ -362,6 +380,11 @@ void sendPacket(const char* msg) {
 }
 
 
+/*
+  motionServo: This function controls the movement of a servo motor. 
+  It takes the current angle, the destination angle, and the speed as parameters. 
+  It moves the servo from the current angle towards the destination angle at the specified speed.
+*/
 void motionServo(int &angleStart, int angleDest, int speed) {
   // Move the angleStart towards angleDest by speed units
   if(angleStart < angleDest){

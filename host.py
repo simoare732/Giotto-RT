@@ -1,4 +1,3 @@
-import queue
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
@@ -14,20 +13,25 @@ import yaml
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
 
-# --- CONFIGURAZIONE SERVER WEB ---
+# --- SERVER WEB CONFIGURATION ---
 app = Flask(__name__)
-# Evita un avviso di sicurezza su Flask
+# Set a secret key for session management and security
 app.config['SECRET_KEY'] = 'segreto_super_sicuro' 
-# Inizializza SocketIO
+# Initialize SocketIO 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+
+# Arduino serial configuration
 serial_port = '/dev/ttyACM0'
 baud_rate = 115200
 arduino = serial.Serial(port=serial_port, baudrate=baud_rate, timeout=0.2, write_timeout=1)
 time.sleep(2)
 
+# Marker for start and end of a message, in order to avoid wrong messages
 START_MARKER = 0xFE
 END_MARKER = 0xFF
+
+# Maximum payload size for a single message to the Arduino
 MAX_PAYLOAD = 32
 
 THRESHOLD_FULL_QUEUE = 15 # Threshold for the number of points in the queue before stopping sending new points
@@ -112,13 +116,14 @@ def receive_data(timeout_s=2.0):
     raise TimeoutError("Nessuna risposta valida dall'Arduino")
 
 
-def read_telemetry(queue_tel):
+def read_telemetry():
     """
     Continuously read telemetry data from the Arduino and update the global QUEUE_LEVEL and TELEMETRY variables.
     """
     global QUEUE_LEVEL, TELEMETRY
 
-    pattern = r'^\d+,\d+,\d+,\d+$'
+    # Define a regex pattern to match telemetry data in the format "int,int,int,int"
+    pattern = r'^\d+,\d+,\d+,\d+$' 
     while True:
         try:
 
@@ -129,7 +134,7 @@ def read_telemetry(queue_tel):
                 val[3] = 1 if val[3] == config["giotto_config"]["pen_down_angle"] else 0  # Convert pen angle to binary state
                 QUEUE_LEVEL = val[0]  # Update the global QUEUE_LEVEL variable with the first value from telemetry
                 TELEMETRY.append(val)
-
+                
                 socketio.emit("Update telemetry", val)  # Send the telemetry data to the web client via SocketIO
             else:
                 val = tel
@@ -138,10 +143,16 @@ def read_telemetry(queue_tel):
             pass
 
 
-def send_contours(filename, queue_points):
+def send_contours(filename):
     """
-    Process the given image file to extract contours and send them to the Arduino, while also updating the GUI with the points.
-    The function processes the image, extracts contours, and sends each contour point to the Arduino.
+    Process the given image file to extract contours and send them to the Arduino and web site.
+    The function performs the following steps:
+    1. Set the global is_drawing flag to True to indicate that the drawing process is active.
+    2. Notify the web client to clear the canvas.
+    3. Process the image to extract contours and create a path in millimeters.
+    4. For each point in the path, compute the kinematics and send the corresponding data to the Arduino.
+    5. Update the web client with the current point being sent.
+    6. Set the global is_drawing flag to False when the drawing process is complete
     """
     global QUEUE_LEVEL, is_drawing
 
@@ -203,10 +214,17 @@ def send_contours(filename, queue_points):
 
 @app.route('/')
 def index():
+    """
+    Function to render the main page of the web application.
+    """
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
+    """
+    Function to handle file uploads from the web client. 
+    It saves the uploaded image file to the server and starts the drawing process in a separate thread.
+    """
     global is_drawing
     
     if is_drawing:
@@ -225,11 +243,8 @@ def upload_file():
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
 
-        # Usiamo ancora queue_points per mantenere intatta la firma della tua funzione
-        queue_points = queue.Queue()
-
-        # Avvia il processo in background
-        thread_invio = threading.Thread(target=send_contours, args=(filepath, queue_points), daemon=True)
+        # Start the sending process in a separate thread to avoid blocking the main thread
+        thread_invio = threading.Thread(target=send_contours, args=(filepath,), daemon=True)
         thread_invio.start()
 
         return jsonify({'message': 'File salvato e processo di disegno avviato.'}), 200
@@ -237,12 +252,7 @@ def upload_file():
 
 if __name__ == "__main__":
 
-    #filename = input("Enter the image filename (with extension): ")
-    #filename = "imgs_source/" + filename
-
-    queue_tel = queue.Queue()
-
-    listener = threading.Thread(target=read_telemetry, args=(queue_tel,), daemon=True)
+    listener = threading.Thread(target=read_telemetry, daemon=True)
     listener.start()
 
     print("Server is running. Access the web interface at http://localhost:5000")

@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Pannello di Controllo Macchina</title>
+    <title>Machine Control Panel</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body {
@@ -60,17 +60,17 @@
 <body>
 
     <div id="telemetria-panel">
-        <h2>Dati Telemetria</h2>
+        <h2>Telemetry Data</h2>
         <hr>
-        <div class="dato" id="queue-level">Queue Level: In attesa...</div>
-        <div class="dato" id="val2">Angolo Dx (gradi): In attesa...</div>
-        <div class="dato" id="val3">Angolo Sx (gradi): In attesa...</div>
-        <div class="dato" id="val4">Stato Penna: In attesa...</div>
+        <div class="dato" id="queue-level">Queue Level: Waiting...</div>
+        <div class="dato" id="val2">Right Angle (degrees): Waiting...</div>
+        <div class="dato" id="val3">Left Angle (degrees): Waiting...</div>
+        <div class="dato" id="val4">Pen State: Waiting...</div>
 
         <div class="upload-section">
-            <h3>Nuovo Disegno</h3>
+            <h3>New Drawing</h3>
             <input type="file" id="image-upload" accept="image/*">
-            <button onclick="caricaImmagine()">Invia e Disegna</button>
+            <button onclick="caricaImmagine()">Send and Draw</button>
             <p id="upload-status" style="font-size: 0.9em; color: #f1c40f;"></p>
         </div>
     </div>
@@ -84,32 +84,32 @@
         const canvas = document.getElementById('foglio');
         const ctx = canvas.getContext('2d');
         
-        // --- PARAMETRI DI VISUALIZZAZIONE ---
+        // --- DISPLAY PARAMETERS ---
         const SCALA = 5; 
-        const CENTRO_X = canvas.width / 2; // Sposta lo "Zero" della X al centro del canvas (250px)
+        const CENTRO_X = canvas.width / 2; // Moves the X "Zero" to the center of the canvas (250px)
         
-        // Inserisci qui lo stesso offset_y che hai nel file config.yaml
+        // Insert here the same offset_y you have in the config.yaml file
         const OFFSET_Y_PYTHON = 40; 
         
-        // Un margine visivo per non appiccicare il disegno al bordo superiore
+        // A visual margin to avoid sticking the drawing to the top edge
         const MARGINE_ALTO = 30; 
         // ------------------------------------
 
         let lastX = null;
         let lastY = null;
 
-        // 1. Ascolto dei dati di Telemetria
+        // 1. Listening to Telemetry data
         socket.on('Update telemetry', function(dati) {
             document.getElementById('queue-level').innerText = "Queue Level: " + dati[0];
-            document.getElementById('val2').innerText = "Angolo Dx: " + dati[1] + "°";
-            document.getElementById('val3').innerText = "Angolo Sx: " + dati[2] + "°";
-            document.getElementById('val4').innerText = "Stato Penna: " + (dati[3] === 1 ? "Giù" : "Su");
+            document.getElementById('val2').innerText = "Right Angle: " + dati[1] + "°";
+            document.getElementById('val3').innerText = "Left Angle: " + dati[2] + "°";
+            document.getElementById('val4').innerText = "Pen State: " + (dati[3] === 1 ? "Down" : "Up");
         });
 
-        // 2. Ascolto dei nuovi punti da disegnare
+        // 2. Listening to new points to draw
         socket.on('Update points', function(punto) {
             
-            // TRASLAZIONE DELLE COORDINATE
+            // COORDINATE TRANSLATION
             const x = (punto.x * SCALA) + CENTRO_X;
             const y = ((punto.y - OFFSET_Y_PYTHON) * SCALA) + MARGINE_ALTO;
             const state = punto.state; 
@@ -131,29 +131,29 @@
             }
         });
 
-        // 3. Pulisce il canvas prima di un nuovo disegno
+        // 3. Clears the canvas before a new drawing
         socket.on('Clear canvas', function() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            document.getElementById('upload-status').innerText = "Disegno in corso...";
+            document.getElementById('upload-status').innerText = "Drawing in progress...";
             lastX = null;
             lastY = null;
         });
 
         socket.on('Drawing complete', function() {
-            document.getElementById('upload-status').innerText = "Disegno completato!";
+            document.getElementById('upload-status').innerText = "Drawing completed!";
         });
 
-        // 4. Funzione per inviare l'immagine al server Python
+        // 4. Function to send the image to the Python server
         function caricaImmagine() {
             const fileInput = document.getElementById('image-upload');
             const file = fileInput.files[0];
             
             if (!file) {
-                alert("Seleziona un'immagine prima di inviare!");
+                alert("Select an image before sending!");
                 return;
             }
 
-            document.getElementById('upload-status').innerText = "Elaborazione...";
+            document.getElementById('upload-status').innerText = "Processing...";
             
             const formData = new FormData();
             formData.append('file', file);
@@ -165,15 +165,15 @@
             .then(response => response.json())
             .then(data => {
                 if(data.error) {
-                    alert("Errore: " + data.error);
+                    alert("Error: " + data.error);
                     document.getElementById('upload-status').innerText = "";
                 } else {
                     console.log(data.message);
                 }
             })
             .catch(error => {
-                console.error("Errore di rete:", error);
-                document.getElementById('upload-status').innerText = "Errore di connessione.";
+                console.error("Network error:", error);
+                document.getElementById('upload-status').innerText = "Connection error.";
             });
         }
     </script>
