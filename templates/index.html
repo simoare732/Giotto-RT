@@ -85,14 +85,14 @@
         const ctx = canvas.getContext('2d');
         
         // --- DISPLAY PARAMETERS ---
-        const SCALA = 5; 
-        const CENTRO_X = canvas.width / 2; // Moves the X "Zero" to the center of the canvas (250px)
+        const SCALA = 4; // Ridotta a 4 per far rientrare esattamente i 100mm nei 500px lasciando margine
+        const CENTRO_X = canvas.width / 2; 
         
-        // Insert here the same offset_y you have in the config.yaml file
-        const OFFSET_Y_PYTHON = 40; 
+        // La Y minima fisica del robot definita in config.yaml
+        const ROBOT_MIN_Y = 25; 
         
-        // A visual margin to avoid sticking the drawing to the top edge
-        const MARGINE_ALTO = 30; 
+        // Altezza massima dell'area di disegno in millimetri (MAX_Y 125 - MIN_Y 25)
+        const AREA_HEIGHT_MM = 100; 
         // ------------------------------------
 
         let lastX = null;
@@ -110,9 +110,17 @@
         socket.on('Update points', function(punto) {
             
             // COORDINATE TRANSLATION
-            const x = (punto.x * SCALA) + CENTRO_X;
-            const y = ((punto.y - OFFSET_Y_PYTHON) * SCALA) + MARGINE_ALTO;
-            const state = punto.state; 
+            const x = CENTRO_X - (punto.x * SCALA);
+            
+            // Invertiamo l'asse Y per il canvas: (Altezza Totale in scala) - (Y relativa del punto in scala)
+            const y_relativa = punto.y - ROBOT_MIN_Y; 
+            const altezza_totale_canvas = AREA_HEIGHT_MM * SCALA;
+            const margine_verticale = (canvas.height - altezza_totale_canvas) / 2;
+            
+            const y = (y_relativa * SCALA) + margine_verticale;
+            // ---------------------------------------------
+
+            const state = punto.state;
 
             if (state === false) {
                 lastX = x;

@@ -21,8 +21,8 @@ Servo pen;
 Servo servoDx;
 Servo servoSx;
 
-int pinPen = 3;
-int pinServoDx = 2;
+int pinPen = 2;
+int pinServoDx = 3;
 int pinServoSx = 4;
 
 // Constants for packet markers (start and end) and maximum payload size
@@ -69,9 +69,9 @@ void TaskTelemetry(void *pvParameters);
 void setup() {
   Serial.begin(115200);
 
-  pen.write(90);  // Initialize pen to a neutral position
-  servoDx.writeMicroseconds(1500);  // Initialize servoDx to a neutral position
-  servoSx.writeMicroseconds(1500);  // Initialize servoSx to a neutral position
+  pen.write(0);  // Initialize pen to a neutral position
+  servoDx.writeMicroseconds(MAX_PULSE_WIDTH);  // Initialize servoDx to a neutral position
+  servoSx.writeMicroseconds(MIN_PULSE_WIDTH);  // Initialize servoSx to a neutral position
 
   pen.attach(pinPen);
   servoDx.attach(pinServoDx);
@@ -180,78 +180,93 @@ void TaskRec(void *pvParameters) {
 */
 void TaskEngine(void *pvParameters){
   Point p;
+  const int speedUs = 10; // Velocità massima in microsecondi per ciclo
 
-  const int MIN_PULSE = 500;
-  const int MAX_PULSE = 2500;
+  // Le posizioni correnti passano a float per mantenere la precisione durante i calcoli frazionari
+  static float correnteDxUs = 1500.0;
+  static float targetDxUs   = 1500.0;
   
-  // Speed of drawing 
-  const int stepUs = 10; 
-
-  // Variables for the current and target pulse widths for the servos
-  static int correnteDxUs = 1500;
-  static int targetDxUs   = 1500;
+  static float correnteSxUs = 1500.0;
+  static float targetSxUs   = 1500.0;
   
-  static int correnteSxUs = 1500;
-  static int targetSxUs   = 1500;
+  static float stepDx = 0.0;
+  static float stepSx = 0.0;
+  static int totalSteps = 0;
+  static int currentStep = 0;
 
-  static bool target = false;  // Flag to indicate if there is already a target to reach
+  static bool target = false;
 
-  unsigned long tempoInizio;
-  unsigned long tempoFine;
-
-  // The time of last wake up
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xPeriod = pdMS_TO_TICKS(T_te); // Period of task in ticks
+  const TickType_t xPeriod = pdMS_TO_TICKS(T_te);
 
   for (;;) {
 
-    // If there is no target, try to get a new point from the queue
+    // Se non c'è un target in esecuzione, prova a estrarre un nuovo punto dalla coda
     if(!target){
       if (xQueueReceive(queue, &p, 0) == pdPASS){
-        targetDxUs = map(p.angleDx, 0, 180, MIN_PULSE, MAX_PULSE);
-        targetSxUs = map(p.angleSx, 0, 180, MIN_PULSE, MAX_PULSE);
+        
+        targetDxUs = map(p.angleDx, 0, 180, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+        targetSxUs = map(p.angleSx, 0, 180, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
 
         if(p.state != currentPoint.state){
-          pen.write(p.state);  // Move the pen up or down based on the state
-
-          // Wait for 150ms to allow the pen to move up or down before continuing
-          vTaskDelay(pdMS_TO_TICKS(150)); 
-          
-          // The period of the task start over from now 
+          pen.write(p.state);
+          vTaskDelay(pdMS_TO_TICKS(150));
           xLastWakeTime = xTaskGetTickCount();
         }
 
-        target = true;
+        // --- Calcolo dell'interpolazione lineare ---
+        int distDx = targetDxUs - (int)correnteDxUs;
+        int distSx = targetSxUs - (int)correnteSxUs;
+        
+        // Trova quale dei due motori deve percorrere la distanza maggiore
+        int maxDist = max(abs(distDx), abs(distSx));
+
+        if (maxDist > 0) {
+          // Calcola il numero totale di cicli necessari basandosi sul motore che fa più strada
+          totalSteps = maxDist / speedUs;
+          if (totalSteps == 0) totalSteps = 1; // Previene la divisione per zero per movimenti minuscoli
+
+          // Calcola l'incremento esatto per ogni singolo ciclo
+          stepDx = (float)distDx / totalSteps;
+          stepSx = (float)distSx / totalSteps;
+          
+          currentStep = 0;
+          target = true;
+        } else {
+          // I motori sono già esattamente sulle coordinate richieste
+          target = false; 
+        }
       }
     }
 
-    // If there is a target, move the servos towards the target angles
+    // Esecuzione del movimento sincronizzato
     if(target){
-
-      // Compute the new pulse width for the right servo
-      motionServo(correnteDxUs, targetDxUs, stepUs);
-
-      // Compute the new pulse width for the left servo
-      motionServo(correnteSxUs, targetSxUs, stepUs);
+      currentStep++;
       
-      servoDx.writeMicroseconds(correnteDxUs);
-      servoSx.writeMicroseconds(correnteSxUs);
+      correnteDxUs += stepDx;
+      correnteSxUs += stepSx;
 
-      // Update telemetry with the current angles
+      // Condizione di fine movimento: se abbiamo eseguito tutti i passi calcolati
+      if (currentStep >= totalSteps) {
+        correnteDxUs = targetDxUs; // Assicura che l'arrotondamento non causi imprecisioni finali
+        correnteSxUs = targetSxUs;
+        target = false;
+      }
+
+      servoDx.writeMicroseconds((int)correnteDxUs);
+      servoSx.writeMicroseconds((int)correnteSxUs);
+
+      // Aggiornamento telemetria
       if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE){
-        currentPoint.angleDx = map(correnteDxUs, MIN_PULSE, MAX_PULSE, 0, 180);
-        currentPoint.angleSx = map(correnteSxUs, MIN_PULSE, MAX_PULSE, 0, 180);
+        currentPoint.angleDx = map((int)correnteDxUs, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 180);
+        currentPoint.angleSx = map((int)correnteSxUs, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 180);
         currentPoint.state   = p.state;
 
         xSemaphoreGive(mut);
       }
-
-      if(correnteDxUs == targetDxUs && correnteSxUs == targetSxUs){
-        target = false;  // Target reached, reset the flag
-      }
     }
 
-    vTaskDelayUntil(&xLastWakeTime, xPeriod); // Wait for the next cycle
+    vTaskDelayUntil(&xLastWakeTime, xPeriod);
   }
 }
 

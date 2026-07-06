@@ -166,19 +166,20 @@ def convert_pixels_to_millimeters(path, img_width, img_height):
     """
     Converts the pixel coordinates in the path to millimeter coordinates based on the drawing area (sheet) dimensions.
     """
-    # Parameters of the drawing area (sheet) (in millimeters)
-    sheet_width= config["sheet_config"]["sheet_width"]
-    sheet_height= config["sheet_config"]["sheet_height"]
-    offset_y = config["sheet_config"]["offset_y"]    # How distant are the motors from the sheet
-
-    scale = min(sheet_width / img_width, sheet_height / img_height)
-
-    offset_x = -(img_width * scale)/2
+    # Parameters of the drawing area
+    MAX_X = config["sheet_config"]["MAX_X"]
+    MIN_X = config["sheet_config"]["MIN_X"]
+    MAX_Y = config["sheet_config"]["MAX_Y"]
+    MIN_Y = config["sheet_config"]["MIN_Y"]
+    
 
     sheet_path = []
     for p in path:
-        x = (p["x"] * scale) + offset_x
-        y = (p["y"] * scale) + offset_y
+        x = -((p["x"] / img_width) * (MAX_X - MIN_X) + MIN_X)
+        y = (p["y"] / img_height) * (MAX_Y - MIN_Y) + MIN_Y
+
+        if not (MIN_X <= x <= MAX_X and MIN_Y <= y <= MAX_Y):
+            continue
 
         sheet_path.append({"x": x, "y": y, "state": p["state"]})
 
@@ -190,46 +191,35 @@ def compute_kinematics(x ,y):
     Compute the angles for the servos based on the desired x and y coordinates of the pen.
     """
 
-    d = config["giotto_config"]["servo_distance"]  # Distance between the two servos (mm)
-    L1 = config["giotto_config"]["L1"]  # Length of the first arm connected to the servo (mm)
-    L2 = config["giotto_config"]["L2"]  # Length of the second arm connected to the pen (mm)
+    L1 = config["giotto_config"]["servo_distance"]  # Distance between the two servos (mm)
+    L2 = config["giotto_config"]["L1"]  # Length of the first arm connected to the servo (mm)
+    L3 = config["giotto_config"]["L2"]  # Length of the second arm connected to the pen (mm)
 
-    x_L = -d/2
-    x_R = d/2
+    # 4. Offset per la posizione dei due motori sulla base
+    x1 = x + L1 / 2
+    x2 = x - L1 / 2
 
-    # Distance from servo to the target
-    D_L = math.hypot(x - x_L, y)
-    D_R = math.hypot(x - x_R, y)
+    # 5. Distanza in linea retta dal punto target ai motori
+    D1 = math.sqrt(x1**2 + y**2)
+    D2 = math.sqrt(x2**2 + y**2)
 
-    # Check if the target is reachable
-    if D_L > (L1 + L2) or D_R > (L1 + L2) or D_L < abs(L1 - L2) or D_R < abs(L1 - L2):
-        print(f"Target ({x}, {y}) is out of reach.")
-        return None, None
-    
-    # Compute angle of vector
-    beta_L = math.atan2(y, x - x_L)
-    beta_R = math.atan2(y, x - x_R)
+    # 6. Controllo di estensione massima/minima delle braccia
+    if D1 > (L2 + L3) or D2 > (L2 + L3) or D1 < abs(L2 - L3) or D2 < abs(L2 - L3):
+        return None, None # Il target supera l'estensione meccanica delle braccia
 
-    # Cosin theorem to find out the bend angles
-    cos_a_L = (L1**2 + D_L**2 - L2**2) / (2 * L1 * D_L)
-    cos_a_R = (L1**2 + D_R**2 - L2**2) / (2 * L1 * D_R)
+    # 7. Calcolo cinematica inversa per motore sinistro
+    gamma1 = math.atan2(x1, y)
+    theta1 = math.acos((L2**2 + D1**2 - L3**2) / (2 * L2 * D1))
+    angolo_sinistro = math.degrees(theta1 - gamma1)
 
-    # Avoid approximation errors
-    cos_a_L = max(-1, min(1, cos_a_L))
-    cos_a_R = max(-1, min(1, cos_a_R))
+    # 8. Calcolo cinematica inversa per motore destro
+    gamma2 = math.atan2(x2, y)
+    theta2 = math.acos((L2**2 + D2**2 - L3**2) / (2 * L2 * D2))
+    angolo_destro = 180 - math.degrees(gamma2 + theta2)
 
-    alpha_L = math.acos(cos_a_L)
-    alpha_R = math.acos(cos_a_R)
 
-    # Compute angles
-    theta_L = beta_L + alpha_L
-    theta_R = beta_R + alpha_R
-
-    # Convert radiants in degrees
-    angle_L = math.degrees(theta_L)
-    angle_R = math.degrees(theta_R)
-
-    return int(angle_R), int(angle_L)
+    return int(angolo_destro), int(angolo_sinistro)
+    #return int(angle_R), int(angle_L)
 
 
 

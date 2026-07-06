@@ -205,7 +205,12 @@ def send_contours(filename):
 
         time.sleep(0.01)  # Small delay to avoid overwhelming the Arduino
         
-    
+    while QUEUE_LEVEL > THRESHOLD_FULL_QUEUE:
+        print(f"Queue is full ({QUEUE_LEVEL}), waiting to send new points...  ")
+        time.sleep(0.05)
+
+
+    send_data(f"180,0,{config['giotto_config']['pen_up_angle']}")  # Move to initial position with pen up
     is_drawing = False  # Set the drawing flag to False when the drawing process is complete
     socketio.emit("Drawing complete")  # Notify the web client that the drawing process is complete
 

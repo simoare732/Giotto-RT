@@ -4,9 +4,10 @@ image_config:
   threshold: 0.5  # Threshold for binarization (0 to 1)
 
 sheet_config:
-  sheet_width: 80  # Width of the sheet in millimeters
-  sheet_height: 80  # Height of the sheet in millimeters
-  offset_y: 50
+  MIN_X: -50
+  MAX_X: 50
+  MIN_Y: 25
+  MAX_Y: 125
 
 giotto_config:
   servo_distance: 25.8  # Distance between the two servos (mm)

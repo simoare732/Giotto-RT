@@ -3,3 +3,4 @@ ESP32-Drawing-Robot/
 servo/
 test_FRTOS/
 sem/
+__pycache__/
