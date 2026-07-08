@@ -5,8 +5,8 @@
 
 // The packet from HOST will contain these information in format angleDx,angleSx,state
 struct Point{
-  uint8_t angleDx;
-  uint8_t angleSx;
+  float angleDx;
+  float angleSx;
   uint8_t state;
 };
 
@@ -14,7 +14,7 @@ Point currentPoint;  // Global variable to store the current point being process
 SemaphoreHandle_t mut;  // Semaphore to protect access to currentPoint
 
 QueueHandle_t queue;    // Queue to hold points received from the HOST
-const uint8_t QUEUE_SIZE = 20;  // Maximum number of points that can be held in the queue
+const uint8_t QUEUE_SIZE = 30;  // Maximum number of points that can be held in the queue
 
 // Servo objects to control the pen and the two servos
 Servo pen;     
@@ -22,8 +22,8 @@ Servo servoDx;
 Servo servoSx;
 
 int pinPen = 2;
-int pinServoDx = 3;
-int pinServoSx = 4;
+int pinServoDx = 4;
+int pinServoSx = 3;
 
 // Constants for packet markers (start and end) and maximum payload size
 const byte START_MARKER = 0xFE;
@@ -69,13 +69,13 @@ void TaskTelemetry(void *pvParameters);
 void setup() {
   Serial.begin(115200);
 
-  pen.write(0);  // Initialize pen to a neutral position
-  servoDx.writeMicroseconds(MAX_PULSE_WIDTH);  // Initialize servoDx to a neutral position
-  servoSx.writeMicroseconds(MIN_PULSE_WIDTH);  // Initialize servoSx to a neutral position
+  pen.write(80);  // Initialize pen to a neutral position
+  servoDx.writeMicroseconds(1711);  // Initialize servoDx to a neutral position
+  servoSx.writeMicroseconds(1288);  // Initialize servoSx to a neutral position
 
   pen.attach(pinPen);
-  servoDx.attach(pinServoDx);
-  servoSx.attach(pinServoSx);
+  servoDx.attach(pinServoDx, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+  servoSx.attach(pinServoSx, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
 
   mut = xSemaphoreCreateMutex();
 
@@ -141,21 +141,25 @@ void TaskRec(void *pvParameters) {
             data[idx] = '\0';
             Point newP;
 
-            int tempDx = 0;
-            int tempSx = 0;
-            int tempState = 0;
+            // We use strtok to split the data string into tokens based on the comma delimiter
+            char *tok = strtok((char*)data, ",");
 
-            // Read 3 points, and put them into the queue
-            int fields = sscanf((char*)data, "%d,%d,%d", &tempDx, &tempSx, &tempState);
-  
-            if (fields == 3) {
-              newP.angleDx = tempDx;
-              newP.angleSx = tempSx;
-              newP.state   = tempState;
+            if(tok!=NULL){
+              newP.angleDx = atof(tok);  // Convert the first token to float for angleDx
 
-              xQueueSend(queue, &newP, portMAX_DELAY); 
-              
+              tok = strtok(NULL, ","); // Get the next token for angleSx
+              if(tok!=NULL){
+                newP.angleSx = atof(tok);  // Convert the second token to float for angleSx
+
+                tok = strtok(NULL, ","); // Get the next token for state
+                if(tok!=NULL){
+                  newP.state = atoi(tok);  // Convert the third token to int for state
+
+                  xQueueSend(queue, &newP, portMAX_DELAY);  // Send the new point to the queue
+                }
+              }
             }
+            
 
             state = WAIT_START;
           } else {
@@ -178,16 +182,16 @@ void TaskRec(void *pvParameters) {
   If a new point is received, it calculates the target pulse widths for the servos based on the angles and moves the servos towards those targets. 
   It also updates telemetry data with the current angles and pen state.
 */
-void TaskEngine(void *pvParameters){
+void TaskEngine(void *pvParameters) {
   Point p;
-  const int speedUs = 10; // Velocità massima in microsecondi per ciclo
+  const int speedUs = 10; // Maximum speed in microseconds per cycle
 
-  // Le posizioni correnti passano a float per mantenere la precisione durante i calcoli frazionari
-  static float correnteDxUs = 1500.0;
-  static float targetDxUs   = 1500.0;
+  // Current positions are stored as floats to maintain precision during fractional movement calculations
+  static float correnteDxUs = 1711.0;
+  static float targetDxUs   = 1711.0;
   
-  static float correnteSxUs = 1500.0;
-  static float targetSxUs   = 1500.0;
+  static float correnteSxUs = 1288.0;
+  static float targetSxUs   = 1288.0;
   
   static float stepDx = 0.0;
   static float stepSx = 0.0;
@@ -201,63 +205,66 @@ void TaskEngine(void *pvParameters){
 
   for (;;) {
 
-    // Se non c'è un target in esecuzione, prova a estrarre un nuovo punto dalla coda
-    if(!target){
-      if (xQueueReceive(queue, &p, 0) == pdPASS){
+    // If no movement is currently in progress, attempt to fetch a new point from the queue
+    if (!target) {
+      if (xQueueReceive(queue, &p, 0) == pdPASS) {
         
-        targetDxUs = map(p.angleDx, 0, 180, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
-        targetSxUs = map(p.angleSx, 0, 180, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+        // Map target angles to pulse width values for the servo motors
+        targetDxUs = map(p.angleDx * 100, 0, 18000, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+        targetSxUs = map(p.angleSx * 100, 0, 18000, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
 
-        if(p.state != currentPoint.state){
+        // Check if pen state has changed and handle lifting/lowering
+        if (p.state != currentPoint.state) {
           pen.write(p.state);
-          vTaskDelay(pdMS_TO_TICKS(150));
+          vTaskDelay(pdMS_TO_TICKS(1));
           xLastWakeTime = xTaskGetTickCount();
         }
 
-        // --- Calcolo dell'interpolazione lineare ---
+        // --- Linear Interpolation Calculation ---
         int distDx = targetDxUs - (int)correnteDxUs;
         int distSx = targetSxUs - (int)correnteSxUs;
         
-        // Trova quale dei due motori deve percorrere la distanza maggiore
+        // Determine which motor covers the greatest distance to synchronize movement
         int maxDist = max(abs(distDx), abs(distSx));
 
         if (maxDist > 0) {
-          // Calcola il numero totale di cicli necessari basandosi sul motore che fa più strada
+          // Calculate the number of cycles required based on the slowest motor
           totalSteps = maxDist / speedUs;
-          if (totalSteps == 0) totalSteps = 1; // Previene la divisione per zero per movimenti minuscoli
+          if (totalSteps == 0) totalSteps = 1; // Prevent division by zero for micro-movements
 
-          // Calcola l'incremento esatto per ogni singolo ciclo
+          // Calculate the exact increment per cycle for each motor
           stepDx = (float)distDx / totalSteps;
           stepSx = (float)distSx / totalSteps;
           
           currentStep = 0;
           target = true;
         } else {
-          // I motori sono già esattamente sulle coordinate richieste
+          // Motors are already at the target coordinates
           target = false; 
         }
       }
     }
 
-    // Esecuzione del movimento sincronizzato
-    if(target){
+    // Execute synchronized movement
+    if (target) {
       currentStep++;
       
       correnteDxUs += stepDx;
       correnteSxUs += stepSx;
 
-      // Condizione di fine movimento: se abbiamo eseguito tutti i passi calcolati
+      // Finish movement when all steps are completed
       if (currentStep >= totalSteps) {
-        correnteDxUs = targetDxUs; // Assicura che l'arrotondamento non causi imprecisioni finali
+        correnteDxUs = targetDxUs; // Force final target to prevent rounding errors
         correnteSxUs = targetSxUs;
         target = false;
       }
 
+      // Update actual servo positions
       servoDx.writeMicroseconds((int)correnteDxUs);
       servoSx.writeMicroseconds((int)correnteSxUs);
 
-      // Aggiornamento telemetria
-      if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE){
+      // Update telemetry data safely using a mutex
+      if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE) {
         currentPoint.angleDx = map((int)correnteDxUs, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 180);
         currentPoint.angleSx = map((int)correnteSxUs, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 180);
         currentPoint.state   = p.state;
@@ -286,7 +293,7 @@ void TaskTelemetry(void *pvParameters) {
 
     if (xSemaphoreTake(mut, pdMS_TO_TICKS(5)) == pdTRUE) {
       
-      sprintf(telBuffer, "%d,%d,%d,%d", nQueue, currentPoint.angleDx, currentPoint.angleSx, currentPoint.state);
+      sprintf(telBuffer, "%d,%d,%d,%d", nQueue, (int)currentPoint.angleDx, (int)currentPoint.angleSx, currentPoint.state);
 
       xSemaphoreGive(mut);
     } else {

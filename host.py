@@ -34,7 +34,7 @@ END_MARKER = 0xFF
 # Maximum payload size for a single message to the Arduino
 MAX_PAYLOAD = 32
 
-THRESHOLD_FULL_QUEUE = 15 # Threshold for the number of points in the queue before stopping sending new points
+THRESHOLD_FULL_QUEUE = 25 # Threshold for the number of points in the queue before stopping sending new points
 QUEUE_LEVEL = 0 # Current number of points in the queue, updated based on telemetry data
 TELEMETRY = []
 
@@ -173,12 +173,22 @@ def send_contours(filename):
     # Create the path (in pixels) from the contours
     path_pixel = img_manager.draw_contours(contours)
 
-    path_mm = img_manager.convert_pixels_to_millimeters(path_pixel, target_x, target_y)
+    path_mm = img_manager.convert_pixels_to_millimeters(path_pixel)
+
+    path_mm = img_manager.densify_path(path_mm, max_step=0.5)  # Densify the path to ensure smooth drawing
+
+    # Starting position
+    home_x = 0
+    home_y = config["sheet_config"]["MIN_Y"]
+    ang_home_Rx, ang_home_Sx = img_manager.compute_kinematics(home_x, home_y)
+    send_data(f"{ang_home_Rx:.2f},{ang_home_Sx:.2f},{config['giotto_config']['pen_up_angle']}")  # Move to initial position with pen up
+
+    time.sleep(0.5)
 
      # Send the contours data to the Arduino
     for p in path_mm:
-        x = int(p["x"])
-        y = int(p["y"])
+        x = float(p["x"])
+        y = float(p["y"])
         state = p["state"]  # True for pen down, False for pen up
 
         if state:
@@ -192,7 +202,7 @@ def send_contours(filename):
             print(f"Point ({x}, {y}) is unreachable. Skipping...")
             continue  # Skip this point if it's unreachable
 
-        contour_str = f"{ang_Rx},{ang_Sx},{z}"
+        contour_str = f"{ang_Rx:.2f},{ang_Sx:.2f},{z}"
 
         while QUEUE_LEVEL > THRESHOLD_FULL_QUEUE:
             print(f"Queue is full ({QUEUE_LEVEL}), waiting to send new points...  ")
@@ -208,9 +218,9 @@ def send_contours(filename):
     while QUEUE_LEVEL > THRESHOLD_FULL_QUEUE:
         print(f"Queue is full ({QUEUE_LEVEL}), waiting to send new points...  ")
         time.sleep(0.05)
-
-
-    send_data(f"180,0,{config['giotto_config']['pen_up_angle']}")  # Move to initial position with pen up
+    
+    send_data(f"{ang_home_Rx:.2f},{ang_home_Sx:.2f},{config['giotto_config']['pen_up_angle']}")  # Move to initial position with pen up
+    print(f"Sent contour: {ang_home_Rx:.2f},{ang_home_Sx:.2f},{config['giotto_config']['pen_up_angle']}")
     is_drawing = False  # Set the drawing flag to False when the drawing process is complete
     socketio.emit("Drawing complete")  # Notify the web client that the drawing process is complete
 

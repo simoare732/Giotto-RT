@@ -92,7 +92,7 @@
         const ROBOT_MIN_Y = 25; 
         
         // Altezza massima dell'area di disegno in millimetri (MAX_Y 125 - MIN_Y 25)
-        const AREA_HEIGHT_MM = 100; 
+        const AREA_HEIGHT_MM = 90; 
         // ------------------------------------
 
         let lastX = null;
@@ -110,14 +110,14 @@
         socket.on('Update points', function(punto) {
             
             // COORDINATE TRANSLATION
-            const x = CENTRO_X - (punto.x * SCALA);
+            // Asse X: Inseriamo il "più" per assicurarci che i valori positivi vadano a destra
+            const x = CENTRO_X + (punto.x * SCALA);
             
-            // Invertiamo l'asse Y per il canvas: (Altezza Totale in scala) - (Y relativa del punto in scala)
             const y_relativa = punto.y - ROBOT_MIN_Y; 
             const altezza_totale_canvas = AREA_HEIGHT_MM * SCALA;
             const margine_verticale = (canvas.height - altezza_totale_canvas) / 2;
             
-            const y = (y_relativa * SCALA) + margine_verticale;
+            const y = canvas.height - margine_verticale - (y_relativa * SCALA);
             // ---------------------------------------------
 
             const state = punto.state;

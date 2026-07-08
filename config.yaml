@@ -1,17 +1,19 @@
 image_config:
-  image_width: 100  # Width of the image in millimeters
-  image_height: 100  # Height of the image in millimeters
+  image_width: 250  # Width of the image in millimeters
+  image_height: 250  # Height of the image in millimeters
   threshold: 0.5  # Threshold for binarization (0 to 1)
 
 sheet_config:
-  MIN_X: -50
-  MAX_X: 50
-  MIN_Y: 25
-  MAX_Y: 125
+  MIN_X: -50  # Minimum X coordinate for the drawing area (mm)
+  MAX_X: 50   # Maximum X coordinate for the drawing area (mm)
+  MIN_Y: 27   # Minimum Y coordinate for the drawing area (mm)
+  MAX_Y: 125  # Maximum Y coordinate for the drawing area (mm)
 
 giotto_config:
   servo_distance: 25.8  # Distance between the two servos (mm)
   L1: 60.0  # Length of the first arm connected to the servo (mm)
   L2: 70.0  # Length of the second arm connected to the pen (mm)
-  pen_up_angle: 0  # Angle for pen up position (degrees)
-  pen_down_angle: 90  # Angle for pen down position (degrees)
+  pen_up_angle: 80  # Angle for pen up position (degrees)
+  pen_down_angle: 20  # Angle for pen down position (degrees)
+  skew_sx: -4.0  # Software trim for left servo (degrees)
+  skew_dx: 0.0  # Software trim for right servo (degrees)

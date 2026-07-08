@@ -1,5 +1,7 @@
 # Giotto: SCARA Drawer Robot
 
+![Video of giotto at working](https://github.com/simoare732/Giotto-RT/blob/master/assets/video.gif)
+
 University project of a 2D Drawing Robot based on a Five-Bar Linkage SCARA architecture.
 
 ## Description
@@ -67,7 +69,7 @@ The firmware is built on top of **FreeRTOS** and adheres to real-time engineerin
 * **Concurrency & Safety:** Shared resources (like variables storing the current point for telemetry) are protected using the `semphr.h` library, specifically through **Mutexes** with priority inheritance. Communication between `TaskRec` and `TaskEngine` is entirely thread-safe, utilizing a native FreeRTOS **Queue**.
 
 ## Screenshots  
-![Screenshot of application running](https://github.com/simoare732/Giotto-RT/blob/master/screenshots/website.png?raw=true)
+![Screenshot of application running](https://github.com/simoare732/Giotto-RT/blob/master/assets/website.png?raw=true)
 
 ## Made By
 **simoare732** *Date: July 2026*
