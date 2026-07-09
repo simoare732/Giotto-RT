@@ -4,3 +4,5 @@ servo/
 test_FRTOS/
 sem/
 __pycache__/
+cpu_load.log
+InfoProg.odt

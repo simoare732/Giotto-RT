@@ -1,6 +1,6 @@
 # Giotto: SCARA Drawer Robot
 
-![Video of giotto at working](https://github.com/simoare732/Giotto-RT/blob/master/assets/video.gif)
+![Video of giotto at work](https://github.com/simoare732/Giotto-RT/blob/master/assets/video.gif)
 
 University project of a 2D Drawing Robot based on a Five-Bar Linkage SCARA architecture.
 
@@ -46,7 +46,11 @@ pip install -r requirements.txt
    * Verify the pin assignments for the 3 Servos in the `.ino` sketch.
    * Connect the microcontroller via USB and upload the sketch at **115200 baud**.
 
-5. **Configuration:** Open the `config.yaml` file to modify the physical parameters of the robot and the workspace (e.g., sheet dimensions, arm lengths L1 and L2).
+5. **Configuration:** Open the `config.yaml` file to modify the physical parameters of the robot and the workspace (e.g., sheet dimensions, arm lengths L1 and L2). From this file many other parameters can be modified, do it at your own risk.
+If some modifies are done, run **build_config.py** in order to create correctly the file for microcontroller.
+```bash
+python build_config.py
+```
 
 ## Running the System
 

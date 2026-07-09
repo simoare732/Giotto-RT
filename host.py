@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
@@ -13,6 +15,8 @@ import yaml
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
 
+ENABLE_LOG = config['global_variables']['enable_log'] 
+
 # --- SERVER WEB CONFIGURATION ---
 app = Flask(__name__)
 # Set a secret key for session management and security
@@ -23,18 +27,17 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Arduino serial configuration
 serial_port = '/dev/ttyACM0'
-baud_rate = 115200
+baud_rate = config['global_variables']['baud_rate']  # Use the baud rate from the config.yaml file
 arduino = serial.Serial(port=serial_port, baudrate=baud_rate, timeout=0.2, write_timeout=1)
 time.sleep(2)
 
 # Marker for start and end of a message, in order to avoid wrong messages
-START_MARKER = 0xFE
-END_MARKER = 0xFF
+START_MARKER = config['global_variables']['start_marker_value']
+END_MARKER = config['global_variables']['end_marker_value']
 
 # Maximum payload size for a single message to the Arduino
-MAX_PAYLOAD = 32
-
-THRESHOLD_FULL_QUEUE = 25 # Threshold for the number of points in the queue before stopping sending new points
+MAX_PAYLOAD = config['global_variables']['max_payload_value']
+THRESHOLD_FULL_QUEUE = config['global_variables']['threshold_full_queue']
 QUEUE_LEVEL = 0 # Current number of points in the queue, updated based on telemetry data
 TELEMETRY = []
 
@@ -113,9 +116,9 @@ def receive_data(timeout_s=2.0):
 
         return payload.decode('utf-8', errors='ignore')
 
-    raise TimeoutError("Nessuna risposta valida dall'Arduino")
+    raise TimeoutError("Timeout waiting for data from Arduino")
 
-
+    
 def read_telemetry():
     """
     Continuously read telemetry data from the Arduino and update the global QUEUE_LEVEL and TELEMETRY variables.
@@ -129,7 +132,16 @@ def read_telemetry():
 
             tel = receive_data().strip()
 
-            if re.match(pattern, tel):
+            # Check if the telemetry data is a CPU load statistic (starts with '@') and logging is enabled
+            if ENABLE_LOG and tel.startswith('@'):
+                idle_val = tel[1:]
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                
+                # Save the CPU load statistics to a log file named "cpu_load.log"
+                with open("cpu_load.log", "a") as f:
+                    f.write(f"[{timestamp}] Idle cycles per second: {idle_val}\n")
+
+            elif re.match(pattern, tel):
                 val = [int(x) for x in tel.split(',')]
                 val[3] = 1 if val[3] == config["giotto_config"]["pen_down_angle"] else 0  # Convert pen angle to binary state
                 QUEUE_LEVEL = val[0]  # Update the global QUEUE_LEVEL variable with the first value from telemetry
@@ -139,8 +151,8 @@ def read_telemetry():
             else:
                 val = tel
         
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Errore in read_telemetry: {e}")
 
 
 def send_contours(filename):
@@ -243,15 +255,15 @@ def upload_file():
     global is_drawing
     
     if is_drawing:
-        return jsonify({'error': 'La macchina sta già disegnando. Attendi la fine.'}), 400
+        return jsonify({'error': 'Giotto is already drawing. Please wait for completion.'}), 400
 
     if 'file' not in request.files:
-        return jsonify({'error': 'Nessun file ricevuto.'}), 400
+        return jsonify({'error': 'No file received.'}), 400
     
     file = request.files['file']
     
     if file.filename == '':
-        return jsonify({'error': 'Nessun file selezionato.'}), 400
+        return jsonify({'error': 'No file selected.'}), 400
     
     if file:
         filename = secure_filename(file.filename)
@@ -262,7 +274,7 @@ def upload_file():
         thread_invio = threading.Thread(target=send_contours, args=(filepath,), daemon=True)
         thread_invio.start()
 
-        return jsonify({'message': 'File salvato e processo di disegno avviato.'}), 200
+        return jsonify({'message': 'File saved and drawing process started.'}), 200
 
 
 if __name__ == "__main__":

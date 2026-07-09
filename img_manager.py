@@ -307,8 +307,22 @@ def compute_kinematics(x, y):
     skew_sx = config["giotto_config"]["skew_sx"]
     skew_dx = config["giotto_config"]["skew_dx"]
 
-    angle_Sx += skew_sx
-    angle_Rx += skew_dx
+    tempAngle_Sx = angle_Sx + skew_sx
+    tempAngle_Rx = angle_Rx + skew_dx
+
+    if tempAngle_Sx < 0:
+        angle_Sx = 0
+    elif tempAngle_Sx > 180:
+        angle_Sx = 180
+    else:
+        angle_Sx = tempAngle_Sx
+
+    if tempAngle_Rx < 0:
+        angle_Rx = 0
+    elif tempAngle_Rx > 180:
+        angle_Rx = 180
+    else:
+        angle_Rx = tempAngle_Rx
 
     return angle_Rx, angle_Sx
 

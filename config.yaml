@@ -10,6 +10,11 @@ sheet_config:
   MAX_Y: 125  # Maximum Y coordinate for the drawing area (mm)
 
 giotto_config:
+  pin_pen: 2
+  pin_servo_left: 3
+  pin_servo_right: 4
+  neutral_position_servoSx: 1288  # in microseconds
+  neutral_position_servoDx: 1711  # in microseconds
   servo_distance: 25.8  # Distance between the two servos (mm)
   L1: 60.0  # Length of the first arm connected to the servo (mm)
   L2: 70.0  # Length of the second arm connected to the pen (mm)
@@ -17,3 +22,21 @@ giotto_config:
   pen_down_angle: 20  # Angle for pen down position (degrees)
   skew_sx: -4.0  # Software trim for left servo (degrees)
   skew_dx: 0.0  # Software trim for right servo (degrees)
+
+global_variables:
+  baud_rate: 115200  # Baud rate for serial communication
+  enable_log: false  # If true, it keeps track of the CPU load in a log file named "cpu_load.log"
+  max_payload_value: 32
+  queue_size: 30    # Maximum number of commands that can be queued for execution
+  threshold_full_queue: 20  # Threshold for the queue level before waiting for the queue to empty
+  start_marker_value: 0xFE
+  end_marker_value: 0xFF
+  buffer_size: 32  # Size of the buffer for receiving commands
+
+
+task_variables:
+  period_task_engine: 20
+  period_task_telemetry: 30
+  priority_task_engine: 3
+  priority_task_telemetry: 1
+  priority_task_rec: 2

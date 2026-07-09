@@ -2,6 +2,14 @@
 #include <Arduino_FreeRTOS.h>
 #include <queue.h>
 #include <semphr.h>
+#include "config.h"
+
+#if ENABLE_LOG
+volatile uint32_t idleCounter = 0;
+extern "C" void vApplicationIdleHook(void) {
+    idleCounter++;
+}
+#endif
 
 // The packet from HOST will contain these information in format angleDx,angleSx,state
 struct Point{
@@ -14,21 +22,16 @@ Point currentPoint;  // Global variable to store the current point being process
 SemaphoreHandle_t mut;  // Semaphore to protect access to currentPoint
 
 QueueHandle_t queue;    // Queue to hold points received from the HOST
-const uint8_t QUEUE_SIZE = 30;  // Maximum number of points that can be held in the queue
 
 // Servo objects to control the pen and the two servos
 Servo pen;     
 Servo servoDx;
 Servo servoSx;
 
-int pinPen = 2;
-int pinServoDx = 4;
-int pinServoSx = 3;
-
 // Constants for packet markers (start and end) and maximum payload size
-const byte START_MARKER = 0xFE;
-const byte END_MARKER   = 0xFF;
-const byte MAX_PAYLOAD  = 32;
+const byte START_MARKER = START_MARKER_VALUE;
+const byte END_MARKER   = END_MARKER_VALUE;
+const byte MAX_PAYLOAD  = MAX_PAYLOAD_VALUE;
 
 byte payload[MAX_PAYLOAD+1];
 byte payloadLen = 0;
@@ -42,8 +45,8 @@ enum ReadState{
   WAIT_END
 };
 
-const uint8_t T_te = 20;  // Task Engine Period
-const uint8_t T_tt = 100;  // Task Telemetry Period
+const uint8_t T_te = PERIOD_TASK_ENGINE;  // Task Engine Period
+const uint8_t T_tt = PERIOD_TASK_TELEMETRY;  // Task Telemetry Period
 
 // Function to calculate checksum using XOR operation
 byte calcChecksum(const byte* data, byte len);
@@ -67,23 +70,23 @@ void TaskEngine(void *pvParameters);
 void TaskTelemetry(void *pvParameters);
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(BAUD_RATE);
 
-  pen.write(80);  // Initialize pen to a neutral position
-  servoDx.writeMicroseconds(1711);  // Initialize servoDx to a neutral position
-  servoSx.writeMicroseconds(1288);  // Initialize servoSx to a neutral position
+  pen.write(PEN_UP_ANGLE);  // Initialize pen to a neutral position
+  servoDx.writeMicroseconds(NEUTRAL_POSITION_SERVODX);  // Initialize servoDx to a neutral position
+  servoSx.writeMicroseconds(NEUTRAL_POSITION_SERVOSX);  // Initialize servoSx to a neutral position
 
-  pen.attach(pinPen);
-  servoDx.attach(pinServoDx, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
-  servoSx.attach(pinServoSx, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+  pen.attach(PIN_PEN);
+  servoDx.attach(PIN_SERVO_RIGHT, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
+  servoSx.attach(PIN_SERVO_LEFT, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH);
 
   mut = xSemaphoreCreateMutex();
 
   queue = xQueueCreate(QUEUE_SIZE, sizeof(Point));
       
-  xTaskCreate(TaskRec, "TaskRx", 220, NULL, 2, NULL);
-  xTaskCreate(TaskEngine, "TaskEngine", 220, NULL, 3, NULL);
-  xTaskCreate(TaskTelemetry, "TaskTelemetry", 140, NULL, 1, NULL);
+  xTaskCreate(TaskRec, "TaskRec", 220, NULL, PRIORITY_TASK_REC, NULL);
+  xTaskCreate(TaskEngine, "TaskEngine", 220, NULL, PRIORITY_TASK_ENGINE, NULL);
+  xTaskCreate(TaskTelemetry, "TaskTelemetry", 200, NULL, PRIORITY_TASK_TELEMETRY, NULL);
 
   vTaskStartScheduler();
 }
@@ -187,11 +190,11 @@ void TaskEngine(void *pvParameters) {
   const int speedUs = 10; // Maximum speed in microseconds per cycle
 
   // Current positions are stored as floats to maintain precision during fractional movement calculations
-  static float correnteDxUs = 1711.0;
-  static float targetDxUs   = 1711.0;
+  static float correnteDxUs = NEUTRAL_POSITION_SERVODX;
+  static float targetDxUs   = NEUTRAL_POSITION_SERVODX;
   
-  static float correnteSxUs = 1288.0;
-  static float targetSxUs   = 1288.0;
+  static float correnteSxUs = NEUTRAL_POSITION_SERVOSX;
+  static float targetSxUs   = NEUTRAL_POSITION_SERVOSX;
   
   static float stepDx = 0.0;
   static float stepSx = 0.0;
@@ -282,7 +285,12 @@ void TaskEngine(void *pvParameters) {
   TaskTelemetry: This task is responsible for sending telemetry data to the host computer.
 */
 void TaskTelemetry(void *pvParameters) {
-  char telBuffer[32];
+  char telBuffer[BUFFER_SIZE]; // Buffer for telemetry data
+
+  #if ENABLE_LOG
+  char statsBuffer[BUFFER_SIZE]; // Buffer for CPU load statistics
+  int tickCount = 0;
+  #endif
   
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xPeriod = pdMS_TO_TICKS(T_tt); 
@@ -302,6 +310,26 @@ void TaskTelemetry(void *pvParameters) {
     }
     
     sendPacket(telBuffer);
+    
+    #if ENABLE_LOG
+    tickCount++;
+    if (tickCount >= 10) { // Enters this block every 10 cycles if Task Telemetry
+      uint32_t currentIdle;
+      
+      // Enter a critical section to safely read and reset the idle counter
+      taskENTER_CRITICAL();
+      currentIdle = idleCounter;
+      idleCounter = 0; 
+      taskEXIT_CRITICAL();
+      // Enter a critical section to safely read and reset the idle counter
+      
+      // Creates and send a packet to the HOST
+      sprintf(statsBuffer, "@%lu", currentIdle);
+      sendPacket(statsBuffer);
+      
+      tickCount = 0;
+    }
+    #endif
 
     // Task blocked until the next cycle
     vTaskDelayUntil(&xLastWakeTime, xPeriod);
